@@ -15,16 +15,41 @@
 // stand in for /bot and /output:
 //   mkdir -p out && MAKEFUN_BOT_DIR=. MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const BOT_DIR = process.env.MAKEFUN_BOT_DIR ?? '/bot';
 const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
+// The gate only accepts a real posted X status, so refuse a POST.json that
+// does not name one before anything is copied.
+const POST_PATH = join(BOT_DIR, 'POST.json');
+let postDoc: { url?: unknown };
+try {
+  postDoc = JSON.parse(readFileSync(POST_PATH, 'utf8')) as { url?: unknown };
+} catch {
+  console.error('POST.json could not be read or parsed — it must name the posted X status.');
+  process.exit(1);
+}
+const X_POST = /^https:\/\/x\.com\/[A-Za-z0-9_]+\/status\/[0-9]+$/;
+if (typeof postDoc.url !== 'string' || !X_POST.test(postDoc.url)) {
+  console.error('POST.json has no usable X post URL — expected https://x.com/<handle>/status/<digits>.');
+  process.exit(1);
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 try {
-  copyFileSync(join(BOT_DIR, 'POST.json'), join(OUTPUT_DIR, 'POST.json'));
+  copyFileSync(POST_PATH, join(OUTPUT_DIR, 'POST.json'));
 } catch (err) {
   console.error(`POST.json could not be copied from ${BOT_DIR}: ${(err as Error).message}`);
+  process.exit(1);
+}
+
+// Read the written copy back and confirm it is byte-for-byte the file that
+// was validated above; a partial write must never reach the gate silently.
+const written = readFileSync(join(OUTPUT_DIR, 'POST.json'));
+const source = readFileSync(POST_PATH);
+if (!written.equals(source)) {
+  console.error('POST.json in the output directory differs from the source — refusing to continue.');
   process.exit(1);
 }
